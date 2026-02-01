@@ -1,0 +1,295 @@
+name: 📱 Android Emulator VNC (Zun x Kami Tunnel)
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: '🕐 Thời gian sử dụng'
+        required: false
+        default: '5h40m'
+        type: choice
+        options:
+        - '1h'
+        - '3h' 
+        - '5h40m'
+      android_version:
+        description: '🤖 Phiên bản Android'
+        required: false
+        default: '11.0'
+        type: choice
+        options:
+        - '9.0'
+        - '10.0'
+        - '11.0'
+        - '12.0'
+
+jobs:
+  Android-VNC:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🛠️ Khởi tạo hệ thống
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget curl tar > /dev/null 2>&1
+          
+      - name: 🤖 Cài đặt Android SDK
+        run: |
+          sudo apt-get install -y -qq android-sdk > /dev/null 2>&1
+          
+      - name: 🖥️ Cài đặt VNC Server
+        run: |
+          sudo apt-get install -y -qq x11vnc xvfb > /dev/null 2>&1
+          sudo apt-get install -y -qq fluxbox > /dev/null 2>&1
+          
+      - name: 📦 Cài đặt Android Tools
+        run: |
+          # Cài Android SDK Command Line Tools
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip -q commandlinetools-linux-9477386_latest.zip
+          mv cmdline-tools latest
+          
+          # Set environment
+          echo "export ANDROID_HOME=$HOME/android-sdk" >> $HOME/.bashrc
+          echo "export PATH=\$PATH:\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_HOME/platform-tools:\$ANDROID_HOME/emulator" >> $HOME/.bashrc
+          source $HOME/.bashrc
+          
+      - name: 📱 Tạo Android Emulator
+        run: |
+          export ANDROID_HOME=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
+          
+          # Accept licenses
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
+          
+          # Cài đặt system image
+          case "${{ github.event.inputs.android_version }}" in
+            "9.0") API_LEVEL=28 ;;
+            "10.0") API_LEVEL=29 ;;
+            "11.0") API_LEVEL=30 ;;
+            "12.0") API_LEVEL=31 ;;
+            *) API_LEVEL=30 ;;
+          esac
+          
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "system-images;android-${API_LEVEL};google_apis;x86_64" > /dev/null 2>&1
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "emulator" > /dev/null 2>&1
+          
+          # Tạo AVD
+          echo "no" | $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd \
+            -n android_emulator \
+            -k "system-images;android-${API_LEVEL};google_apis;x86_64" \
+            -d "pixel_5" > /dev/null 2>&1
+          
+      - name: 🚀 Khởi động VNC Server
+        run: |
+          # Tạo display ảo
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+          export DISPLAY=:99
+          
+          # Khởi động window manager
+          fluxbox > /dev/null 2>&1 &
+          
+          # Khởi động VNC server
+          x11vnc -display :99 -forever -shared -rfbport 5900 -passwd 123456 > /dev/null 2>&1 &
+          
+          sleep 3
+          
+      - name: 📱 Khởi động Android Emulator
+        run: |
+          export ANDROID_HOME=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
+          export DISPLAY=:99
+          
+          # Khởi động emulator
+          nohup $ANDROID_HOME/emulator/emulator -avd android_emulator \
+            -no-snapshot-save \
+            -no-audio \
+            -gpu swiftshader_indirect \
+            -camera-back none \
+            -camera-front none \
+            -memory 4096 \
+            -cores 2 > /dev/null 2>&1 &
+          
+          # Đợi emulator boot xong
+          echo "⏳ Đang khởi động Android Emulator..."
+          $ANDROID_HOME/platform-tools/adb wait-for-device > /dev/null 2>&1
+          
+          # Đợi boot animation xong
+          while [ "$($ANDROID_HOME/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; do
+            sleep 2
+          done
+          
+          echo "✅ Android Emulator đã sẵn sàng!"
+          
+      - name: 🌐 Khởi động Kami Tunnel cho VNC
+        run: |
+          wget -q https://github.com/kami2k1/tunnel/releases/latest/download/kami-tunnel-linux-amd64.tar.gz
+          tar -xzf kami-tunnel-linux-amd64.tar.gz > /dev/null 2>&1
+          chmod +x kami-tunnel
+          nohup ./kami-tunnel 5900 > /dev/null 2>&1 &
+          
+      - name: 🎉 THÔNG TIN TRUY CẬP ANDROID VNC
+        run: |
+          echo "⏳ Đang lấy liên kết từ Kami Tunnel..."
+          for i in {1..30}; do
+            if [ -f kami_tunnel.txt ]; then
+              break
+            fi
+            sleep 2
+          done
+          
+          if [ ! -f kami_tunnel.txt ]; then
+            echo "❌ Không thể lấy liên kết tunnel"
+            exit 1
+          fi
+          
+          VNC_HOST=$(cat kami_tunnel.txt | tr -d '\n\r')
+          
+          export ANDROID_HOME=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_HOME/platform-tools
+          
+          ANDROID_VERSION=$(adb shell getprop ro.build.version.release | tr -d '\r')
+          DEVICE_MODEL="Pixel 5"
+          
+          echo ""
+          echo "════════════════════════════════════════════════════════════════════════════════"
+          echo "║                                                                              ║"
+          echo "║              📱 ANDROID EMULATOR ĐÃ SẴN SÀNG (By Zun)                        ║"
+          echo "║                                                                              ║"
+          echo "════════════════════════════════════════════════════════════════════════════════"
+          echo ""
+          echo "🌐 THÔNG TIN KẾT NỐI VNC:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📍 Host/IP  : $VNC_HOST"
+          echo "🔌 Port     : 5900"
+          echo "🔐 Password : 123456"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📱 THÔNG TIN THIẾT BỊ:"
+          echo "┌────────────────────────────────────────────────────────────────────────────┐"
+          echo "│ Thiết bị        : $DEVICE_MODEL                                            │"
+          echo "│ Android Version : Android $ANDROID_VERSION                                 │"
+          echo "│ Màn hình        : 1920x1080                                                │"
+          echo "│ RAM             : 4 GB                                                     │"
+          echo "│ CPU             : 2 Cores                                                  │"
+          echo "└────────────────────────────────────────────────────────────────────────────┘"
+          echo ""
+          echo ""
+          echo "🔧 PHẦN MỀM VNC CLIENT (Chọn 1 trong các ứng dụng sau):"
+          echo "┌────────────────────────────────────────────────────────────────────────────┐"
+          echo "│ Windows   : TightVNC, RealVNC, UltraVNC                                   │"
+          echo "│ MacOS     : RealVNC Viewer, Screen Sharing (built-in)                     │"
+          echo "│ Linux     : Remmina, TigerVNC                                             │"
+          echo "│ Android   : VNC Viewer (Google Play)                                      │"
+          echo "│ iOS       : VNC Viewer (App Store)                                        │"
+          echo "│ Web       : noVNC (không cần cài đặt)                                     │"
+          echo "└────────────────────────────────────────────────────────────────────────────┘"
+          echo ""
+          echo ""
+          echo "📝 HƯỚNG DẪN KẾT NỐI:"
+          echo "  1️⃣  Tải VNC Viewer: https://www.realvnc.com/en/connect/download/viewer/"
+          echo "  2️⃣  Mở VNC Viewer"
+          echo "  3️⃣  Nhập: $VNC_HOST:5900"
+          echo "  4️⃣  Nhập password: 123456"
+          echo "  5️⃣  Bắt đầu sử dụng Android!"
+          echo ""
+          echo ""
+          echo "💡 MẸO HAY:"
+          echo "  • Nhấn giữ chuột trái = Long press trên Android"
+          echo "  • Scroll chuột = Vuốt màn hình"
+          echo "  • Có thể cài APK bằng ADB"
+          echo "  • Có thể dùng noVNC để truy cập qua web browser"
+          echo ""
+          echo ""
+          echo "⚠️  LƯU Ý:"
+          echo "  • Android sẽ bị xóa khi workflow kết thúc"
+          echo "  • Không lưu trữ dữ liệu quan trọng"
+          echo "  • Thời gian tối đa: ${{ github.event.inputs.duration }}"
+          echo ""
+          echo "════════════════════════════════════════════════════════════════════════════════"
+          echo ""
+          echo ""
+          echo "VNC_HOST=$VNC_HOST" >> $GITHUB_ENV
+
+      - name: ⏳ Duy trì phiên làm việc
+        run: |
+          case "${{ github.event.inputs.duration }}" in
+            "1h") MAX_LOOPS=12 ;;
+            "3h") MAX_LOOPS=36 ;;
+            "5h40m") MAX_LOOPS=68 ;;
+            *) MAX_LOOPS=68 ;;
+          esac
+          
+          START_TIME=$(date +%s)
+          
+          export ANDROID_HOME=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_HOME/platform-tools
+          
+          for i in $(seq 1 $MAX_LOOPS); do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            HOURS=$((ELAPSED / 3600))
+            MINUTES=$(((ELAPSED % 3600) / 60))
+            
+            MEM_TOTAL=$(free -h | awk 'NR==2 {print $2}')
+            MEM_USED=$(free -h | awk 'NR==2 {print $3}')
+            MEM_PERCENT=$(free | awk 'NR==2 {printf "%.1f%%", $3/$2 * 100}')
+            
+            CPU_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | tr -d ',')
+            
+            # Kiểm tra Android còn chạy không
+            ADB_STATUS=$(adb get-state 2>/dev/null || echo "offline")
+            if [ "$ADB_STATUS" = "device" ]; then
+              ANDROID_STATUS="✅ Đang chạy"
+            else
+              ANDROID_STATUS="⚠️ Offline"
+            fi
+            
+            # Kiểm tra VNC
+            VNC_STATUS=$(pgrep x11vnc > /dev/null && echo "✅ Hoạt động" || echo "❌ Stopped")
+            
+            echo ""
+            echo "┌──────────────────────────────────────────────────────────────────────────────┐"
+            echo "│                                                                              │"
+            echo "│  ⏰ THỜI GIAN: ${HOURS}h ${MINUTES}m | Lần kiểm tra: #${i}/${MAX_LOOPS}                         │"
+            echo "│                                                                              │"
+            echo "├──────────────────────────────────────────────────────────────────────────────┤"
+            echo "│                                                                              │"
+            echo "│  🌐 Kết nối VNC tại:                                                         │"
+            echo "│                                                                              │"
+            echo "│     Host: $VNC_HOST:5900                                                     │"
+            echo "│     Pass: 123456                                                             │"
+            echo "│                                                                              │"
+            echo "├──────────────────────────────────────────────────────────────────────────────┤"
+            echo "│                                                                              │"
+            echo "│  📊 TRẠNG THÁI:                                                              │"
+            echo "│                                                                              │"
+            echo "│     📱 Android    : $ANDROID_STATUS                                          │"
+            echo "│     🖥️  VNC       : $VNC_STATUS                                              │"
+            echo "│     🧠 RAM       : $MEM_USED / $MEM_TOTAL ($MEM_PERCENT)                      │"
+            echo "│     ⚡ CPU Load  : $CPU_LOAD                                                  │"
+            echo "│                                                                              │"
+            echo "└──────────────────────────────────────────────────────────────────────────────┘"
+            echo ""
+            
+            sleep 300
+          done
+          
+          echo ""
+          echo ""
+          echo "════════════════════════════════════════════════════════════════════════════════"
+          echo "║                                                                              ║"
+          echo "║                      ⏱️  PHIÊN LÀM VIỆC ĐÃ KẾT THÚC                           ║"
+          echo "║                                                                              ║"
+          echo "║                                                                              ║"
+          echo "║                  Thời gian sử dụng: ${{ github.event.inputs.duration }}                          ║"
+          echo "║                                                                              ║"
+          echo "║              Cảm ơn bạn đã sử dụng Android Emulator VNC!                     ║"
+          echo "║                                                                              ║"
+          echo "║                                                                              ║"
+          echo "════════════════════════════════════════════════════════════════════════════════"
+          echo ""
+          echo ""
