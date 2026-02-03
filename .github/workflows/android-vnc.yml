@@ -29,16 +29,18 @@ jobs:
     timeout-minutes: 360
     
     steps:
-      - name: Initialize System
+      - name: Khởi tạo hệ thống
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq wget curl tar unzip
+          sudo apt-get update -qq > /dev/null 2>&1
+          sudo apt-get install -y -qq wget curl tar unzip > /dev/null 2>&1
+          echo "✅ Đã cài đặt công cụ cơ bản"
           
-      - name: Install VNC Server and Display
+      - name: Cài đặt VNC Server
         run: |
-          sudo apt-get install -y -qq x11vnc xvfb fluxbox
+          sudo apt-get install -y -qq x11vnc xvfb fluxbox > /dev/null 2>&1
+          echo "✅ Đã cài đặt VNC Server"
           
-      - name: Install Android SDK Tools
+      - name: Cài đặt Android SDK
         run: |
           mkdir -p $HOME/android-sdk/cmdline-tools
           cd $HOME/android-sdk/cmdline-tools
@@ -54,9 +56,11 @@ jobs:
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
           
-      - name: Setup Android Emulator
+          echo "✅ Đã cài đặt Android SDK"
+          
+      - name: Thiết lập Android Emulator
         run: |
-          yes | sdkmanager --licenses || true
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
           
           case "${{ github.event.inputs.android_version }}" in
             "9.0") API_LEVEL=28 ;;
@@ -66,31 +70,37 @@ jobs:
             *) API_LEVEL=30 ;;
           esac
           
-          echo "Installing Android API Level: $API_LEVEL"
-          sdkmanager "system-images;android-${API_LEVEL};google_apis;x86_64"
-          sdkmanager "platform-tools" "emulator"
+          echo "📥 Đang tải Android ${{ github.event.inputs.android_version }} (API $API_LEVEL)..."
+          sdkmanager "system-images;android-${API_LEVEL};google_apis;x86_64" > /dev/null 2>&1
+          sdkmanager "platform-tools" "emulator" > /dev/null 2>&1
           
           echo "no" | avdmanager create avd \
             -n android_emulator \
             -k "system-images;android-${API_LEVEL};google_apis;x86_64" \
-            -d "pixel_5"
+            -d "pixel_5" > /dev/null 2>&1
           
-      - name: Start VNC Server
+          echo "✅ Đã tạo Android Emulator"
+          
+      - name: Khởi động VNC Server
         run: |
-          Xvfb :99 -screen 0 1920x1080x24 &
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 2
           export DISPLAY=:99
           echo "DISPLAY=:99" >> $GITHUB_ENV
           
-          fluxbox &
+          fluxbox > /dev/null 2>&1 &
           sleep 2
           
-          x11vnc -display :99 -forever -shared -rfbport 5900 -passwd 123456 -noxdamage -bg
+          x11vnc -display :99 -forever -shared -rfbport 5900 -passwd 123456 -noxdamage -bg > /dev/null 2>&1
           sleep 3
           
-      - name: Start Android Emulator
+          echo "✅ VNC Server đã chạy"
+          
+      - name: Khởi động Android Emulator
         run: |
           export DISPLAY=:99
+          
+          echo "Đang khởi động Android Emulator..."
           
           emulator -avd android_emulator \
             -no-snapshot-save \
@@ -101,18 +111,23 @@ jobs:
             -memory 4096 \
             -cores 2 \
             -no-window \
-            -no-boot-anim &
+            -no-boot-anim \
+            -accel off \
+            -no-accel \
+            -no-metrics \
+            -verbose -show-kernel 2>&1 | grep -v "KVM\|WARNING\|metrics\|ProbeKVM\|INFO\|library_mode\|hasSufficient" &
           
-          echo "Waiting for Android Emulator to boot..."
-          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done; input keyevent 82'
+          echo "⏳ Chờ Android khởi động..."
+          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done; input keyevent 82' 2>/dev/null
           
-          echo "Android Emulator is ready!"
+          echo "✅ Android Emulator đã sẵn sàng!"
           
-      - name: Setup Remote Access Tunnel
+      - name: Thiết lập kết nối từ xa
         run: |
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
           chmod +x cloudflared
           
+          echo "🌐 Đang tạo đường hầm VNC..."
           ./cloudflared tunnel --url tcp://localhost:5900 > cloudflared.log 2>&1 &
           
           sleep 10
@@ -120,65 +135,53 @@ jobs:
           TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' cloudflared.log | head -n 1)
           
           if [ -z "$TUNNEL_URL" ]; then
-            echo "Failed to get tunnel URL. Trying alternative method..."
             sleep 5
             TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' cloudflared.log | head -n 1)
           fi
           
           if [ -z "$TUNNEL_URL" ]; then
-            echo "ERROR: Could not establish tunnel"
-            cat cloudflared.log
+            echo "❌ Không thể tạo đường hầm"
             exit 1
           fi
           
           echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
           echo "$TUNNEL_URL" > tunnel_url.txt
+          echo "✅ Đường hầm đã sẵn sàng: $TUNNEL_URL"
           
-      - name: Display Connection Information
+      - name: Hiển thị thông tin kết nối
         run: |
           TUNNEL_URL=$(cat tunnel_url.txt)
-          ANDROID_VERSION=$(adb shell getprop ro.build.version.release | tr -d '\r')
+          ANDROID_VERSION=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r')
           
           echo ""
-          echo "═══════════════════════════════════════════════════════════════════"
-          echo "                ANDROID EMULATOR VNC - READY                       "
-          echo "═══════════════════════════════════════════════════════════════════"
+          echo "════════════════════════════════════════════════════════"
+          echo "            📱 ANDROID EMULATOR ĐÃ SẴN SÀNG            "
+          echo "════════════════════════════════════════════════════════"
           echo ""
-          echo "VNC CONNECTION INFO:"
-          echo "-------------------------------------------------------------------"
-          echo "Tunnel URL  : $TUNNEL_URL"
-          echo "Password    : 123456"
+          echo "🌐 KẾT NỐI VNC:"
+          echo "   URL      : $TUNNEL_URL"
+          echo "   Mật khẩu : 123456"
           echo ""
-          echo "DEVICE INFO:"
-          echo "-------------------------------------------------------------------"
-          echo "Device      : Pixel 5 Emulator"
-          echo "Android     : $ANDROID_VERSION"
-          echo "Display     : 1920x1080"
-          echo "RAM         : 4 GB"
-          echo "CPU Cores   : 2"
+          echo "📱 THIẾT BỊ:"
+          echo "   Máy      : Pixel 5"
+          echo "   Android  : $ANDROID_VERSION"
+          echo "   Màn hình : 1920x1080"
+          echo "   RAM      : 4 GB"
           echo ""
-          echo "VNC CLIENT OPTIONS:"
-          echo "-------------------------------------------------------------------"
-          echo "• Windows   : TightVNC, RealVNC, UltraVNC"
-          echo "• macOS     : RealVNC Viewer, Screen Sharing"
-          echo "• Linux     : Remmina, TigerVNC"
-          echo "• Android   : VNC Viewer (Play Store)"
-          echo "• iOS       : VNC Viewer (App Store)"
-          echo "• Web       : Use noVNC web client"
+          echo "💻 PHẦN MỀM VNC:"
+          echo "   Tải về: https://www.realvnc.com/download/viewer/"
           echo ""
-          echo "HOW TO CONNECT:"
-          echo "-------------------------------------------------------------------"
-          echo "1. Download VNC Viewer: https://www.realvnc.com/download/viewer/"
-          echo "2. Open VNC Viewer"
-          echo "3. Connect to: $TUNNEL_URL"
-          echo "4. Enter password: 123456"
-          echo "5. Start using Android!"
+          echo "📝 CÁCH KẾT NỐI:"
+          echo "   1. Mở VNC Viewer"
+          echo "   2. Nhập: $TUNNEL_URL"
+          echo "   3. Nhập mật khẩu: 123456"
+          echo "   4. Bắt đầu sử dụng!"
           echo ""
-          echo "Session Duration: ${{ github.event.inputs.duration }}"
-          echo "═══════════════════════════════════════════════════════════════════"
+          echo "⏱️  Thời gian: ${{ github.event.inputs.duration }}"
+          echo "════════════════════════════════════════════════════════"
           echo ""
 
-      - name: Keep Session Alive
+      - name: Duy trì phiên làm việc
         run: |
           case "${{ github.event.inputs.duration }}" in
             "1h") SLEEP_TIME=3600 ;;
@@ -195,7 +198,7 @@ jobs:
             ELAPSED=$((CURRENT_TIME - START_TIME))
             
             if [ $ELAPSED -ge $SLEEP_TIME ]; then
-              echo "Session time limit reached"
+              echo "Hết thời gian sử dụng"
               break
             fi
             
@@ -203,39 +206,27 @@ jobs:
             MINUTES=$(((ELAPSED % 3600) / 60))
             
             ADB_STATUS=$(adb get-state 2>/dev/null || echo "offline")
-            if [ "$ADB_STATUS" = "device" ]; then
-              ANDROID_STATUS="Running"
-            else
-              ANDROID_STATUS="Offline"
-            fi
+            [ "$ADB_STATUS" = "device" ] && ANDROID_STATUS="✅ Chạy" || ANDROID_STATUS="⚠️ Lỗi"
             
-            VNC_STATUS=$(pgrep x11vnc > /dev/null && echo "Active" || echo "Stopped")
-            
-            MEM_USED=$(free -h | awk 'NR==2 {print $3}')
-            MEM_TOTAL=$(free -h | awk 'NR==2 {print $2}')
-            CPU_LOAD=$(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | tr -d ',')
+            VNC_STATUS=$(pgrep x11vnc > /dev/null && echo "✅ OK" || echo "❌ Lỗi")
             
             echo ""
-            echo "=========================================="
-            echo "Runtime: ${HOURS}h ${MINUTES}m"
-            echo "=========================================="
-            echo "VNC URL     : $TUNNEL_URL"
-            echo "Password    : 123456"
-            echo "Android     : $ANDROID_STATUS"
-            echo "VNC Server  : $VNC_STATUS"
-            echo "Memory      : $MEM_USED / $MEM_TOTAL"
-            echo "CPU Load    : $CPU_LOAD"
-            echo "=========================================="
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "⏰ ${HOURS}h ${MINUTES}m | 🌐 $TUNNEL_URL"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📱 Android: $ANDROID_STATUS  |  🖥️ VNC: $VNC_STATUS"
+            echo "🔐 Mật khẩu: 123456"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             
             sleep 300
           done
           
           echo ""
-          echo "═══════════════════════════════════════════════════════════════════"
-          echo "                    SESSION ENDED                                  "
-          echo "═══════════════════════════════════════════════════════════════════"
-          echo "Total Duration: ${{ github.event.inputs.duration }}"
-          echo "Thank you for using Android Emulator VNC!"
-          echo "═══════════════════════════════════════════════════════════════════"
+          echo "════════════════════════════════════════════════════════"
+          echo "           ⏱️  PHIÊN LÀM VIỆC ĐÃ KẾT THÚC            "
+          echo "════════════════════════════════════════════════════════"
+          echo "Thời gian: ${{ github.event.inputs.duration }}"
+          echo "Cảm ơn bạn đã sử dụng!"
+          echo "════════════════════════════════════════════════════════"
           echo ""
